@@ -47,9 +47,13 @@ gpkgLayer_ai='masks_ai'
 gpkgWaterdeel="waterdelen.gpkg"
 gpkgWaterdeel_Layer="bgt_vlakken"
 
+gpkgWaterdeelStatus="waterdeel_status.gpkg"
+gpkgWaterdeelStatus_layer="waterdeel_status"
+
 sieve_size=500
 
 url_api="http://192.168.1.100:8080/post_example"
+
 crop_size=30
 bgtSamAfwijkingsPerc=5
 
@@ -98,6 +102,45 @@ elif device.type == "mps":
   # %%  
 
 
+def getBGTIntsectieSam(centerpoint, pointno):
+
+    xmin = centerpoint[0]-crop_size
+    ymin = centerpoint[1]-crop_size
+    xmax = centerpoint[0]+crop_size
+    ymax = centerpoint[1]+crop_size
+
+    #onderzoeksgebied SAM
+    proces_area = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
+
+    try:     
+        gdf_bgt_polygons=gpd.read_file(f"{procesDir}/{gpkgWaterdeel}", layer=gpkgWaterdeel_Layer)
+            
+        centerpoint_proces_area = Point(centerpoint[0], centerpoint[1])
+    
+        # bgt area that is covering the selection point
+        selected_polygon_BGT = gdf_bgt_polygons[gdf_bgt_polygons.contains(centerpoint_proces_area)]
+
+        # Compute intersection bgt_waterdeel with procesarea and force to 2d
+        bgt_intersectie_2proces = selected_polygon_BGT.intersection(proces_area,align=False)
+        bgt_intersectie_2proces_2d=bgt_intersectie_2proces.force_2d()
+
+        gdf_bgt_intersectie_from_serie = gpd.GeoDataFrame(geometry=bgt_intersectie_2proces_2d)
+
+        if "point_no" not in gdf_bgt_intersectie_from_serie.columns:
+            gdf_bgt_intersectie_from_serie["point_no"] = pointno 
+        
+        if debugging==1:
+            gdf_bgt_intersectie_from_serie.to_file(f"{procesDir}/bgtvlaktest", layer="bgt_vlak", driver="GPKG")
+        
+        return True, gdf_bgt_intersectie_from_serie
+    
+    except Exception as e:
+        print(f"getBGTIntsectieSam failed ({e}).")
+        return False, 0
+
+
+
+
 def getBGTSamIthaxDiffProcessArea(dfBGTPolygon, df_samPolygon, df_Diff_Ithax, point_no):
     
     try:
@@ -105,11 +148,10 @@ def getBGTSamIthaxDiffProcessArea(dfBGTPolygon, df_samPolygon, df_Diff_Ithax, po
         total_area_BGT = dfBGTPolygon.geometry.area.sum()
         total_area_Ithax = df_Diff_Ithax.geometry.area.sum()
         total_diff=total_area_BGT- (total_area_sam+  total_area_Ithax)
-        total_diff_perc= total_diff/(total_area_sam+total_area_Ithax) *100
+        total_diff_perc= total_diff/total_area_BGT *100
 
         print(f"total_area_sam:{total_area_sam};total_area_BGT:{total_area_BGT};total_area_Ithax:{total_area_Ithax};Verschil{total_diff};Perc{total_diff_perc}")
 
-    
         if abs(total_diff_perc)>bgtSamAfwijkingsPerc:
               return True , 2
         else:
@@ -122,11 +164,17 @@ def getBGTSamIthaxDiffProcessArea(dfBGTPolygon, df_samPolygon, df_Diff_Ithax, po
  
 
 
-def setStatusSAMPolygon( pointno,status):
+def setStatusSAMPolygon( pointno,status,bgt_intersectie_2proces_2d):
     #Sammasks
     gdf_mask_polygon = gpd.read_file(f"{procesDir}/{gpkgMasks}", layer=gpkgLayer)
     gdf_mask_polygon.loc[gdf_mask_polygon['point_no'] == pointno, 'status'] = status
     gdf_mask_polygon.to_file(f"{procesDir}/{gpkgMasks}", layer=gpkgLayer, driver="GPKG") 
+
+    if "status" not in bgt_intersectie_2proces_2d.columns:
+            bgt_intersectie_2proces_2d["status"] = status 
+
+
+    bgt_intersectie_2proces_2d.to_file(f"{procesDir}/{gpkgWaterdeelStatus}", layer=gpkgWaterdeelStatus_layer, driver="GPKG",mode='a') 
     return True
 
 
@@ -140,6 +188,8 @@ def getBGTSAMDifferenceProcessArea(centerpoint):
     #onderzoeksgebied SAM
     proces_area = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
     
+    # to do aanpassen tvd
+
     try:
         #BGT
         #gdf_bgt_polygons = gpd.read_file("C:\\projects2025\\h&a\\Innovatie_1\\data\\waterdelen.gpkg", layer="bgt_vlakken")
@@ -181,7 +231,7 @@ def getBGTSAMDifferenceProcessArea(centerpoint):
         return False
     
 
-def postprocesIthax(centerpoint,dfMasks,pointno):
+def postprocesIthax(centerpoint,dfMasks,gdf_bgt_polygons,pointno):
     gpkgMasks_ithax='masker_ithax.gpkg'
     gpkgLayer_ithax='masks_ithax'
 
@@ -197,7 +247,7 @@ def postprocesIthax(centerpoint,dfMasks,pointno):
     try:
         #BGT
         #gdf_bgt_polygons = gpd.read_file("C:\\projects2025\\h&a\\Innovatie_1\\data\\waterdelen.gpkg", layer="bgt_vlakken")
-        gdf_bgt_polygons=gpd.read_file(f"{procesDir}/{gpkgWaterdeel}", layer=gpkgWaterdeel_Layer)
+        #gdf_bgt_polygons=gpd.read_file(f"{procesDir}/{gpkgWaterdeel}", layer=gpkgWaterdeel_Layer)
         
         #Sammasks
         gdf_mask_polygon = gpd.read_file(f"{procesDir}/{gpkgMasks}", layer=gpkgLayer)
@@ -211,23 +261,23 @@ def postprocesIthax(centerpoint,dfMasks,pointno):
         gdf_mask_polygon.to_crs=gdf_bgt_polygons.crs
 
         # select the sam and bgt area that is covering the selection point
-        selected_polygon_BGT = gdf_bgt_polygons[gdf_bgt_polygons.contains(centerpoint_proces_area)]
+        #selected_polygon_BGT = gdf_bgt_polygons[gdf_bgt_polygons.contains(centerpoint_proces_area)]
         selected_polygon_SAM_all = gdf_mask_polygon[gdf_mask_polygon.contains(centerpoint_proces_area)]
         #there can be more so select the first one
         selected_polygon_SAM = selected_polygon_SAM_all.iloc[[0]]
 
-        print(selected_polygon_SAM)
-
-
+    
         # Compute intersection bgt_waterdeel and force to 2d
-        bgt_intersectie_2proces = selected_polygon_BGT.intersection(proces_area,align=False)
-        bgt_intersectie_2proces_2d=bgt_intersectie_2proces.force_2d()
+        #bgt_intersectie_2proces = gdf_bgt_polygons.intersection(proces_area,align=False)
+        
+        #bgt_intersectie_2proces_2d=bgt_intersectie_2proces.force_2d()
 
         #Be sure that for ITHAX the sam crs is used
         gdf_mask_ITHAX_polygon = gdf_mask_ITHAX_polygon.to_crs(gdf_mask_polygon.crs)
         
         # clip  ITHAX Maskers with bgt intersection
-        clipped_mask_ITHAX_polygon = gdf_mask_ITHAX_polygon.clip(bgt_intersectie_2proces_2d)
+        #clipped_mask_ITHAX_polygon = gdf_mask_ITHAX_polygon.clip(bgt_intersectie_2proces_2d)
+        clipped_mask_ITHAX_polygon = gdf_mask_ITHAX_polygon.clip(gdf_bgt_polygons)
 
         #store clipped masks
         gpkgMasksFile_ithax= f"{procesDir}/{gpkgMasks_ithax}"
@@ -236,8 +286,8 @@ def postprocesIthax(centerpoint,dfMasks,pointno):
         #remove part found by sam
         #bgt_intersectie_2proces = selected_polygon_BGT.intersection(proces_area,align=True)
 
-        selected_polygon_SAM.crs=bgt_intersectie_2proces.crs
-        selected_polygon_SAM.to_crs=bgt_intersectie_2proces.crs
+        selected_polygon_SAM.crs=gdf_bgt_polygons.crs
+        selected_polygon_SAM.to_crs=gdf_bgt_polygons.crs
 
         #selected_polygon_SAM.to_file(procesDir+"/tst.gpkg", layer="test", driver="GPKG") 
         
@@ -436,7 +486,7 @@ def readLastProcessedItemFile():
             pointList2proces=[[1,1]]
         else:
             pointList2proces=pointList[-start2proces:]
-        #print (pointList2proces)
+ 
         file.close()
         return pointList2proces
 # %%
@@ -536,13 +586,11 @@ def subset_for_sam(coordinate, file2Segment):
     print('Subset  succesvol') 
 
     return fname_subset 
-
     
 def multiline_to_linestring(geometry):
     if isinstance(geometry, MultiLineString):
         return linemerge(geometry)
     return geometry
-
 
 def generate_vector_from_masks(mask, subsetfile, pointno):
     
@@ -594,7 +642,7 @@ def generate_vector_from_masks(mask, subsetfile, pointno):
                         lines.append(boundary )
                     
     # Create a GeoDataFrame from the polylines
-    #df = gpd.GeoDataFrame(geometry=lines, crs=crs)
+
     polygons =gpd.GeoSeries(polygonize(lines))
     df = gpd.GeoDataFrame(geometry=polygons, crs=crs)
     
@@ -602,7 +650,6 @@ def generate_vector_from_masks(mask, subsetfile, pointno):
     if "point_no" not in df.columns:
         df["point_no"] = pointno
 
-    
     # Append the GeoDataFrame to the masks geopackage
     maskfileGPKG=procesDir+ "//" + gpkgMasks 
     df.to_file(maskfileGPKG, layer=gpkgLayer, driver="GPKG", mode='a') 
@@ -679,7 +726,11 @@ def procesImage(centerPoint,pointno):
         show_masks(image, masks, scores, point_coords=input_point, input_labels=input_label, borders=True)
     
     #store the results in geopackage
-    df_samPolygon2=generate_vector_from_masks(masks[0], file4sam,pointno)
+    df_samPolygon2=generate_vector_from_masks(masks[0], file4sam,pointno) # to do
+
+    
+    # BGT intersection in procesarea
+    result, df_bgt_intersectie_procesArea= getBGTIntsectieSam(centerPoint,pointno)
 
     #  get difference between bgt and sam   
     result,df_BGTPolygon, df_samPolygon  = getBGTSAMDifferenceProcessArea(centerPoint)
@@ -687,21 +738,23 @@ def procesImage(centerPoint,pointno):
     if result==True: 
          #difference too big, find cause via  Ithax qualification  
         result, dfMasksIthax=getMaskFromIthax(centerPoint,pointno)
+
         if result==False:
             print(f"Ithax class. failed for: {pointno} ,{centerPoint}" )
         else:
-            #select intersectie ithax bgt 
-            df_Masks_Ithax_diff=postprocesIthax(centerPoint,dfMasksIthax,pointno)
+            #select intersectie Ithx with bgt and difference with sam 
+            df_Masks_Ithax_diff=postprocesIthax(centerPoint,dfMasksIthax,df_bgt_intersectie_procesArea,pointno)
             print(f"Ithax class. success for: {pointno} ,{centerPoint}" )
-            #  get difference between sam and Ithax   
+            
+            # get difference between sam and Ithax   
             result, action=getBGTSamIthaxDiffProcessArea(df_BGTPolygon, df_samPolygon, df_Masks_Ithax_diff,pointno)
             if result==True: 
                 if action==1:  
-                    setStatusSAMPolygon(pointno,"ok")
+                    setStatusSAMPolygon(pointno,"ok",df_bgt_intersectie_procesArea)
                 else:
-                    setStatusSAMPolygon(pointno,"nok")
+                    setStatusSAMPolygon(pointno,"nok",df_bgt_intersectie_procesArea)
     else:
-       setStatusSAMPolygon(pointno,"NAN")
+       setStatusSAMPolygon(pointno,"NAN",df_bgt_intersectie_procesArea)
 
     #clean, release & close
     collected =gc.collect()
