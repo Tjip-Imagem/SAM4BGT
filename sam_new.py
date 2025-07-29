@@ -55,7 +55,7 @@ sieve_size=500
 url_api="http://192.168.1.100:8080/post_example"
 
 crop_size=30
-bgtSamAfwijkingsPerc=5
+bgtSamAfwijkingsPerc=10
 
 #ithax
  # ITHAX API Url:
@@ -119,25 +119,28 @@ def getBGTIntsectieSam(centerpoint, pointno):
     
         # bgt area that is covering the selection point
         selected_polygon_BGT = gdf_bgt_polygons[gdf_bgt_polygons.contains(centerpoint_proces_area)]
-
+         
         # Compute intersection bgt_waterdeel with procesarea and force to 2d
         bgt_intersectie_2proces = selected_polygon_BGT.intersection(proces_area,align=False)
         bgt_intersectie_2proces_2d=bgt_intersectie_2proces.force_2d()
 
         gdf_bgt_intersectie_from_serie = gpd.GeoDataFrame(geometry=bgt_intersectie_2proces_2d)
+        
+        gdf_bgt_intersectie_from_serie
+        if gdf_bgt_intersectie_from_serie.is_empty.all():
+            return False,gdf_bgt_intersectie_from_serie
 
         if "point_no" not in gdf_bgt_intersectie_from_serie.columns:
             gdf_bgt_intersectie_from_serie["point_no"] = pointno 
-        
+
         if debugging==1:
             gdf_bgt_intersectie_from_serie.to_file(f"{procesDir}/bgtvlaktest", layer="bgt_vlak", driver="GPKG")
-        
+
         return True, gdf_bgt_intersectie_from_serie
     
     except Exception as e:
         print(f"getBGTIntsectieSam failed ({e}).")
         return False, 0
-
 
 
 
@@ -150,21 +153,19 @@ def getBGTSamIthaxDiffProcessArea(dfBGTPolygon, df_samPolygon, df_Diff_Ithax, po
         total_diff=total_area_BGT- (total_area_sam+  total_area_Ithax)
         total_diff_perc= total_diff/total_area_BGT *100
 
-        print(f"total_area_sam:{total_area_sam};total_area_BGT:{total_area_BGT};total_area_Ithax:{total_area_Ithax};Verschil{total_diff};Perc{total_diff_perc}")
+        print(f"total_area_sam: {total_area_sam}; total_area_BGT: {total_area_BGT}; total_area_Ithax: {total_area_Ithax}; Verschil: {total_diff}; Perc: {total_diff_perc}")
 
         if abs(total_diff_perc)>bgtSamAfwijkingsPerc:
-              return True , 2
+              return True , 2, total_diff_perc
         else:
-             return True, 1
+             return True, 1, total_diff_perc
         
     except Exception as e:
         print(f"getBGTSamIthaxDiffProcessArea failed ({e}).")
         return False, 0
      
- 
 
-
-def setStatusSAMPolygon( pointno,status,bgt_intersectie_2proces_2d):
+def setStatusSAMPolygon( pointno,status,BGT_SAM_Diff_Perc,BGT_SAM_Ithax_Diff_Perc,bgt_intersectie_2proces_2d):
     #Sammasks
     gdf_mask_polygon = gpd.read_file(f"{procesDir}/{gpkgMasks}", layer=gpkgLayer)
     gdf_mask_polygon.loc[gdf_mask_polygon['point_no'] == pointno, 'status'] = status
@@ -172,6 +173,15 @@ def setStatusSAMPolygon( pointno,status,bgt_intersectie_2proces_2d):
 
     if "status" not in bgt_intersectie_2proces_2d.columns:
             bgt_intersectie_2proces_2d["status"] = status 
+
+    if "diff_perc_bgt_sam" not in bgt_intersectie_2proces_2d.columns:
+            bgt_intersectie_2proces_2d["diff_perc_bgt_sam"] = 0.0
+            bgt_intersectie_2proces_2d["diff_perc_bgt_sam"] = BGT_SAM_Diff_Perc
+
+    if "diff_perc_bgt_ithax_sam" not in bgt_intersectie_2proces_2d.columns:
+            bgt_intersectie_2proces_2d["diff_perc_bgt_ithax_sam"] = 0.0  
+            bgt_intersectie_2proces_2d["diff_perc_bgt_ithax_sam"] = BGT_SAM_Ithax_Diff_Perc  
+
 
 
     bgt_intersectie_2proces_2d.to_file(f"{procesDir}/{gpkgWaterdeelStatus}", layer=gpkgWaterdeelStatus_layer, driver="GPKG",mode='a') 
@@ -187,7 +197,10 @@ def getBGTSAMDifferenceProcessArea(centerpoint):
 
     #onderzoeksgebied SAM
     proces_area = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
-    
+    afwijking2big=False
+    selected_polygon_SAM=1
+    BGT_SAM_Diff_Perc=0
+
     # to do aanpassen tvd
 
     try:
@@ -205,7 +218,7 @@ def getBGTSAMDifferenceProcessArea(centerpoint):
 
           #Sammasks
         gdf_mask_polygon = gpd.read_file(f"{procesDir}/{gpkgMasks}", layer=gpkgLayer)
-    
+
      
         #Be sure that the sam crs is used
         gdf_mask_polygon.crs=gdf_bgt_polygons.crs
@@ -215,20 +228,24 @@ def getBGTSAMDifferenceProcessArea(centerpoint):
         selected_polygon_SAM = selected_polygon_SAM_all.iloc[[0]]
 
         
-        areaDiff=bgt_intersectie_2proces_2d.geometry.area.values[0]-selected_polygon_SAM.area.values[0] 
-        areaTotal=bgt_intersectie_2proces_2d.geometry.area.values[0]+selected_polygon_SAM.area.values[0]
-        BGT_SAM_Diff_Perc=areaDiff/areaTotal*100
+        areaDiff=bgt_intersectie_2proces_2d.geometry.area.sum()-selected_polygon_SAM.geometry.area.sum()
+        areaTotal=bgt_intersectie_2proces_2d.geometry.area.sum() +selected_polygon_SAM.area.sum()
+        # areaDiff=bgt_intersectie_2proces_2d.geometry.area.values[0]-selected_polygon_SAM.area.values[0] 
+        # areaTotal=bgt_intersectie_2proces_2d.geometry.area.values[0]+selected_polygon_SAM.area.values[0]
+        BGT_SAM_Diff_Perc=areaDiff/bgt_intersectie_2proces_2d.geometry.area.sum()*100
 
         print (f" Verschil% BGT SAM :{BGT_SAM_Diff_Perc}")
-
+        
+        
         if BGT_SAM_Diff_Perc>bgtSamAfwijkingsPerc:
-              return True, bgt_intersectie_2proces_2d, selected_polygon_SAM
-        else:
-             return False, bgt_intersectie_2proces_2d, selected_polygon_SAM
-    
+            afwijking2big=True
+        else: 
+            afwijking2big=False
+
+        return True,  afwijking2big, bgt_intersectie_2proces_2d, selected_polygon_SAM, BGT_SAM_Diff_Perc
     except Exception as e:
         print(f"getBGTIntersectionForProcessArea failed ({e}).")
-        return False
+    return False,afwijking2big, bgt_intersectie_2proces_2d, selected_polygon_SAM,BGT_SAM_Diff_Perc
     
 
 def postprocesIthax(centerpoint,dfMasks,gdf_bgt_polygons,pointno):
@@ -415,7 +432,6 @@ def getMaskFromIthax( centerpoint,pointno):
     return output_geojson_file
 
 def storeMask(mask,subset_file):
-     
      #no longer used
      with rasterio.open(subset_file) as src:
         data = src.read(1, masked=True)
@@ -478,7 +494,7 @@ def readLastProcessedItemFile():
         content = file.read()
         global items
         items= int(content)
-        print (items)
+        
         pointArrayLength= len(pointList)
         start2proces=pointArrayLength-items
         
@@ -542,7 +558,6 @@ def show_masks(image, masks, scores, point_coords=None, box_coords=None, input_l
 def rdCoord2LocalpixelCoord (subsetfile, centerPoint):
     
     print('Recalculate RD to local Pixel Coordinate')
-
     # Opens source dataset
     src_ds = gdal.Open(subsetfile) 
    
@@ -663,25 +678,34 @@ def startProcessingBatch():
     pointList2proces=readLastProcessedItemFile()
     print ('Running in batchmode')
     #pointList=[  [257401 ,590459]]
-    aantal=len(pointList2proces)      
-    
+    aantal=len(pointList2proces) 
+
+
     count=0
+    result=False
+
     for x,y   in pointList2proces:
         if x!=1:     
             centerPoint= [x,y]
             count=count+1
-            procesImage( centerPoint,  items+count)
-            print ( 'Plot: {} van {} verwerkt'.format(count,aantal ))
-            totalprocessed = items+count
-            writeLastProcessedItemFile(str(totalprocessed))
-            if count==10:
-                print('GPU Mem. usage exceeded, restart kernel')
-                break
+            result,df_bgt_intersectie_procesArea= getBGTIntsectieSam(centerPoint,items+count)
+            if result==False:
+                print(f"ProcesPoint not in BGT vlak: {items+count} ,{centerPoint}" )
+            else:    
+                procesImage( centerPoint,  items+count)
+                print ( 'Plot: {} van {} verwerkt'.format(count,aantal ))
+                totalprocessed = items+count
+                writeLastProcessedItemFile(str(totalprocessed))
+                if count==10:
+                    print('GPU Mem. usage exceeded, restart kernel')
+                    break
    
     print('Batch End')  
    
 def procesImage(centerPoint,pointno):
     result=False
+    
+    # get intersectie of procesarea with bgt
 
     file4sam= subset_for_sam(centerPoint,file2proces)
 
@@ -727,34 +751,42 @@ def procesImage(centerPoint,pointno):
     
     #store the results in geopackage
     df_samPolygon2=generate_vector_from_masks(masks[0], file4sam,pointno) # to do
-
-    
+ 
     # BGT intersection in procesarea
-    result, df_bgt_intersectie_procesArea= getBGTIntsectieSam(centerPoint,pointno)
+    result,df_bgt_intersectie_procesArea= getBGTIntsectieSam(centerPoint,pointno)
+    if result==False:
+          print(f"ProcesPoint not in BGT vlak: {pointno} ,{centerPoint}" )
 
-    #  get difference between bgt and sam   
-    result,df_BGTPolygon, df_samPolygon  = getBGTSAMDifferenceProcessArea(centerPoint)
-   
+    #  get difference between bgt and sam 
+    BGT_SAM_Diff_Perc=0   
+    BGT_SAM_Ithax_Diff_Perc=0
+    
+    if result==True:
+        result,afwijking2big,df_BGTPolygon, df_samPolygon,BGT_SAM_Diff_Perc  = getBGTSAMDifferenceProcessArea(centerPoint)
+
     if result==True: 
+        if (afwijking2big==True):
          #difference too big, find cause via  Ithax qualification  
-        result, dfMasksIthax=getMaskFromIthax(centerPoint,pointno)
-
-        if result==False:
-            print(f"Ithax class. failed for: {pointno} ,{centerPoint}" )
+            result, dfMasksIthax=getMaskFromIthax(centerPoint,pointno)
+            if result==False:
+                print(f"Ithax class. failed for: {pointno} ,{centerPoint}" )
+            else:
+                #select intersectie Ithx with bgt and difference with sam 
+                df_Masks_Ithax_diff=postprocesIthax(centerPoint,dfMasksIthax,df_bgt_intersectie_procesArea,pointno)
+                print(f"Ithax class. success for: {pointno} ,{centerPoint}" )
+                
+                # get difference between sam and Ithax   
+                result, action, BGT_SAM_Ithax_Diff_Perc=getBGTSamIthaxDiffProcessArea(df_BGTPolygon, df_samPolygon, df_Masks_Ithax_diff,pointno)
+                if result==True: 
+                    if action==1:  
+                        setStatusSAMPolygon(pointno,"ok",BGT_SAM_Diff_Perc ,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
+                    else:
+                        setStatusSAMPolygon(pointno,"nok",BGT_SAM_Diff_Perc,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
         else:
-            #select intersectie Ithx with bgt and difference with sam 
-            df_Masks_Ithax_diff=postprocesIthax(centerPoint,dfMasksIthax,df_bgt_intersectie_procesArea,pointno)
-            print(f"Ithax class. success for: {pointno} ,{centerPoint}" )
-            
-            # get difference between sam and Ithax   
-            result, action=getBGTSamIthaxDiffProcessArea(df_BGTPolygon, df_samPolygon, df_Masks_Ithax_diff,pointno)
-            if result==True: 
-                if action==1:  
-                    setStatusSAMPolygon(pointno,"ok",df_bgt_intersectie_procesArea)
-                else:
-                    setStatusSAMPolygon(pointno,"nok",df_bgt_intersectie_procesArea)
+             setStatusSAMPolygon(pointno,"ok",BGT_SAM_Diff_Perc ,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
     else:
-       setStatusSAMPolygon(pointno,"NAN",df_bgt_intersectie_procesArea)
+    
+       setStatusSAMPolygon(pointno,"NAN",BGT_SAM_Diff_Perc,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
 
     #clean, release & close
     collected =gc.collect()
