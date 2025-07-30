@@ -54,7 +54,7 @@ sieve_size=500
 
 url_api="http://192.168.1.100:8080/post_example"
 
-crop_size=30
+crop_size=25
 bgtSamAfwijkingsPerc=10
 
 #ithax
