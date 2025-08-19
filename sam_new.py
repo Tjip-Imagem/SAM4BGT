@@ -1,6 +1,11 @@
 import os
 # if using Apple MPS, fall back to CPU for unsupported ops
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+
+#os.environ["PROJ_LIB"] = "C:/projects2025/wdod_ZSW/.pixi/envs/default/Library/share/proj"
+#os.environ["GDAL_DRIVER_PATH"] ="C:/projects2025/wdod_ZSW/.pixi/envs/default/Library/lib/gdalplugins"
+#os.environ["PATH"] ="C:/projects2025/wdod_ZSW/.pixi/envs/default/Library/bin"
+
 import numpy as np
 import torch
 import sys
@@ -38,6 +43,7 @@ pointList=getPointlist()
 print (pointList)
 procesDir='C:/projects2025/proces/test'
 file2proces=procesDir+'/h&a_totaal.tif'
+
 gpkgMasks='masker_sam.gpkg'
 gpkgLayer='masks_sam'
 
@@ -51,11 +57,13 @@ gpkgWaterdeelStatus="waterdeel_status.gpkg"
 gpkgWaterdeelStatus_layer="waterdeel_status"
 
 sieve_size=500
-
-url_api="http://192.168.1.100:8080/post_example"
-
 crop_size=25
+
 bgtSamAfwijkingsPerc=10
+
+
+#url_api="http://192.168.1.100:8080/post_example"
+
 
 #ithax
  # ITHAX API Url:
@@ -182,9 +190,8 @@ def setStatusSAMPolygon( pointno,status,BGT_SAM_Diff_Perc,BGT_SAM_Ithax_Diff_Per
             bgt_intersectie_2proces_2d["diff_perc_bgt_ithax_sam"] = 0.0  
             bgt_intersectie_2proces_2d["diff_perc_bgt_ithax_sam"] = BGT_SAM_Ithax_Diff_Perc  
 
-
-
     bgt_intersectie_2proces_2d.to_file(f"{procesDir}/{gpkgWaterdeelStatus}", layer=gpkgWaterdeelStatus_layer, driver="GPKG",mode='a') 
+    
     return True
 
 
@@ -224,8 +231,20 @@ def getBGTSAMDifferenceProcessArea(centerpoint):
         gdf_mask_polygon.crs=gdf_bgt_polygons.crs
         gdf_mask_polygon.to_crs=gdf_bgt_polygons.crs
 
+        
+
         selected_polygon_SAM_all = gdf_mask_polygon[gdf_mask_polygon.contains(centerpoint_proces_area)]
         selected_polygon_SAM = selected_polygon_SAM_all.iloc[[0]]
+         
+        # Compute intersection sam with procesarea 
+        sam_intersectie_2proces = selected_polygon_SAM.intersection(proces_area,align=False)
+        sam_intersectie_2proces_2d=sam_intersectie_2proces.force_2d()
+
+        #tvd niet nodig
+        # gpkgMasks_SAM_intersectPath= f"{procesDir}/{gpkgMasks_SAM_intersect}"
+        # sam_intersectie_2proces_2d.to_file(gpkgMasks_SAM_intersectPath, layer=gpkgMasks_SAM_intersectLayer, driver="GPKG", mode='a') 
+ 
+        
 
         
         areaDiff=bgt_intersectie_2proces_2d.geometry.area.sum()-selected_polygon_SAM.geometry.area.sum()
@@ -241,10 +260,11 @@ def getBGTSAMDifferenceProcessArea(centerpoint):
             afwijking2big=True
         else: 
             afwijking2big=False
-
         return True,  afwijking2big, bgt_intersectie_2proces_2d, selected_polygon_SAM, BGT_SAM_Diff_Perc
+    
     except Exception as e:
         print(f"getBGTIntersectionForProcessArea failed ({e}).")
+    
     return False,afwijking2big, bgt_intersectie_2proces_2d, selected_polygon_SAM,BGT_SAM_Diff_Perc
     
 
@@ -283,7 +303,6 @@ def postprocesIthax(centerpoint,dfMasks,gdf_bgt_polygons,pointno):
         #there can be more so select the first one
         selected_polygon_SAM = selected_polygon_SAM_all.iloc[[0]]
 
-    
         # Compute intersection bgt_waterdeel and force to 2d
         #bgt_intersectie_2proces = gdf_bgt_polygons.intersection(proces_area,align=False)
         
@@ -389,28 +408,35 @@ def getMaskFromIthax( centerpoint,pointno):
             if response.status_code == 200:
                 result = response.json()
                 
-                jsonstring=json.dumps(result)
-                
-                # Save as GeoJSON file
-                with open(output_geojson_file, 'w') as f:
-                    json.dump(result, f, indent=2)
-
-                # Print and return geojson file location              
-                print(f"✅ Success!") 
-
-                # Save to GeoPackage
-                geojson_bytes = io.BytesIO(jsonstring.encode('utf-8'))
-
-                # Read it with geopandas
-                gdfMasks = gpd.read_file(geojson_bytes)
-                    #add column 2 store pointno
-                if "point_no" not in gdfMasks.columns:
-                    gdfMasks["point_no"] = pointno
+                if  result["features"]:
                     
-                geopackage_path = procesDir+"/"+gpkgMasks_ai      
-                gdfMasks.to_file(geopackage_path, layer=gpkgLayer_ai, driver="GPKG",  mode='a')
-    
-                return True, gdfMasks
+                    jsonstring=json.dumps(result)
+                    print( jsonstring)
+                    
+                    # Save as GeoJSON file
+                    with open(output_geojson_file, 'w') as f:
+                        json.dump(result, f, indent=2)
+
+                    # Print and return geojson file location              
+                    print(f"✅ Success!") 
+
+                    # Save to GeoPackage
+                    geojson_bytes = io.BytesIO(jsonstring.encode('utf-8'))
+
+                    # Read it with geopandas
+                    gdfMasks = gpd.read_file(geojson_bytes)
+                        #add column 2 store pointno
+                    if "point_no" not in gdfMasks.columns:
+                        gdfMasks["point_no"] = pointno
+                        
+                    geopackage_path = procesDir+"/"+gpkgMasks_ai      
+                    gdfMasks.to_file(geopackage_path, layer=gpkgLayer_ai, driver="GPKG",  mode='a')
+        
+                    return True, gdfMasks
+                else:  
+                    print("No data from ithax")
+                    gdfMasks = None
+                    return False ,gdfMasks
             else:
                 if attempt == 0:  # First attempt failed
                     print(f"Request failed (Status {response.status_code}), retrying in 1 second...")
@@ -767,21 +793,24 @@ def procesImage(centerPoint,pointno):
     if result==True: 
         if (afwijking2big==True):
          #difference too big, find cause via  Ithax qualification  
-            result, dfMasksIthax=getMaskFromIthax(centerPoint,pointno)
-            if result==False:
+            resultIthax, dfMasksIthax=getMaskFromIthax(centerPoint,pointno)
+            if resultIthax==False:
                 print(f"Ithax class. failed for: {pointno} ,{centerPoint}" )
+                setStatusSAMPolygon(pointno,"nok",BGT_SAM_Diff_Perc,0,df_bgt_intersectie_procesArea)    
             else:
                 #select intersectie Ithx with bgt and difference with sam 
                 df_Masks_Ithax_diff=postprocesIthax(centerPoint,dfMasksIthax,df_bgt_intersectie_procesArea,pointno)
                 print(f"Ithax class. success for: {pointno} ,{centerPoint}" )
                 
                 # get difference between sam and Ithax   
-                result, action, BGT_SAM_Ithax_Diff_Perc=getBGTSamIthaxDiffProcessArea(df_BGTPolygon, df_samPolygon, df_Masks_Ithax_diff,pointno)
-                if result==True: 
+                resultSamIthax, action, BGT_SAM_Ithax_Diff_Perc=getBGTSamIthaxDiffProcessArea(df_BGTPolygon, df_samPolygon, df_Masks_Ithax_diff,pointno)
+                if resultSamIthax==True: 
                     if action==1:  
                         setStatusSAMPolygon(pointno,"ok",BGT_SAM_Diff_Perc ,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
                     else:
                         setStatusSAMPolygon(pointno,"nok",BGT_SAM_Diff_Perc,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
+            #no objects found by ithax therefore zero difference and           
+           
         else:
              setStatusSAMPolygon(pointno,"ok",BGT_SAM_Diff_Perc ,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
     else:
