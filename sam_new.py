@@ -9,6 +9,7 @@ os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 import numpy as np
 import torch
 import sys
+#import cv2
 import matplotlib.pyplot as plt
 from PIL import Image
 from osgeo import gdal, ogr
@@ -31,6 +32,8 @@ from PIL import Image
 from  io import BytesIO
 import io
 import time
+from PIL import Image
+
 
 # configuration
 
@@ -40,9 +43,13 @@ model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 items=0
 debugging=0
 pointList=getPointlist()
-print (pointList)
+#print (pointList)
 procesDir='C:/projects2025/proces/test'
 file2proces=procesDir+'/h&a_totaal.tif'
+file2proces="F:/HenA/VoorjaarsVlucht2025POC.tif"
+file2proces=procesDir+'/h&a_voor_demping.tif'
+
+ndivFile= "ndvi.tif"
 
 gpkgMasks='masker_sam.gpkg'
 gpkgLayer='masks_sam'
@@ -57,9 +64,10 @@ gpkgWaterdeelStatus="waterdeel_status.gpkg"
 gpkgWaterdeelStatus_layer="waterdeel_status"
 
 sieve_size=500
-crop_size=25
+crop_size=20
 
 bgtSamAfwijkingsPerc=10
+watervalNdvi=0.07
 
 
 #url_api="http://192.168.1.100:8080/post_example"
@@ -108,6 +116,23 @@ elif device.type == "mps":
 
     np.random.seed(3)
   # %%  
+
+
+def IsPointInwater(CentrePoint):
+
+    pixel_coord=rdCoord2LocalpixelCoord (f"{procesDir}/{ndivFile}", CentrePoint)
+    image = Image.open(f"{procesDir}/{ndivFile}")
+
+    # Get pixel value at (x, y)
+    pixel_value = image.getpixel(pixel_coord)
+
+    if  debugging==1:
+        print(pixel_value)
+
+    if pixel_value<watervalNdvi :
+        return 1
+    else:
+        return 0
 
 
 def getBGTIntsectieSam(centerpoint, pointno):
@@ -245,8 +270,6 @@ def getBGTSAMDifferenceProcessArea(centerpoint):
         # sam_intersectie_2proces_2d.to_file(gpkgMasks_SAM_intersectPath, layer=gpkgMasks_SAM_intersectLayer, driver="GPKG", mode='a') 
  
         
-
-        
         areaDiff=bgt_intersectie_2proces_2d.geometry.area.sum()-selected_polygon_SAM.geometry.area.sum()
         areaTotal=bgt_intersectie_2proces_2d.geometry.area.sum() +selected_polygon_SAM.area.sum()
         # areaDiff=bgt_intersectie_2proces_2d.geometry.area.values[0]-selected_polygon_SAM.area.values[0] 
@@ -276,7 +299,6 @@ def postprocesIthax(centerpoint,dfMasks,gdf_bgt_polygons,pointno):
     ymin = centerpoint[1]-crop_size
     xmax = centerpoint[0]+crop_size
     ymax = centerpoint[1]+crop_size
-
 
     #onderzoeksgebied SAM
     proces_area = Polygon([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)])
@@ -358,7 +380,6 @@ def postprocesIthax(centerpoint,dfMasks,gdf_bgt_polygons,pointno):
             plt.show()
     except Exception as e:
         print(f"postprocesIthax failed ({e}).")
-
 
 
 
@@ -633,7 +654,7 @@ def multiline_to_linestring(geometry):
         return linemerge(geometry)
     return geometry
 
-def generate_vector_from_masks(mask, subsetfile, pointno):
+def generate_vector_from_masks(mask, subsetfile, pointno,isWater):
     
     lines = []
     
@@ -688,8 +709,14 @@ def generate_vector_from_masks(mask, subsetfile, pointno):
     df = gpd.GeoDataFrame(geometry=polygons, crs=crs)
     
     #add column 2 store pointno
-    if "point_no" not in df.columns:
+    if "point_no" not in df.columns:   
         df["point_no"] = pointno
+    
+    #is it water or not based on ndvi
+    if "iswater" not in df.columns:  
+      df["iswater"] = isWater
+     
+
 
     # Append the GeoDataFrame to the masks geopackage
     maskfileGPKG=procesDir+ "//" + gpkgMasks 
@@ -706,7 +733,6 @@ def startProcessingBatch():
     #pointList=[  [257401 ,590459]]
     aantal=len(pointList2proces) 
 
-
     count=0
     result=False
 
@@ -714,6 +740,10 @@ def startProcessingBatch():
         if x!=1:     
             centerPoint= [x,y]
             count=count+1
+
+           
+
+
             result,df_bgt_intersectie_procesArea= getBGTIntsectieSam(centerPoint,items+count)
             if result==False:
                 print(f"ProcesPoint not in BGT vlak: {items+count} ,{centerPoint}" )
@@ -730,6 +760,7 @@ def startProcessingBatch():
    
 def procesImage(centerPoint,pointno):
     result=False
+    
     
     # get intersectie of procesarea with bgt
 
@@ -751,7 +782,7 @@ def procesImage(centerPoint,pointno):
     
     input_point = np.array([[pixelCoord[0], pixelCoord[1]]])
     input_label = np.array([1])
-    if debugging==1:
+    if debugging==0:
         plt.figure(figsize=(10, 10))
         plt.imshow(image)
         show_points(input_point, input_label, plt.gca())
@@ -772,11 +803,12 @@ def procesImage(centerPoint,pointno):
        
     masks.shape  # (number_of_masks) x H x W
     
-    if debugging==1:
+    if debugging==0:
         show_masks(image, masks, scores, point_coords=input_point, input_labels=input_label, borders=True)
     
+    iswater=IsPointInwater(centerPoint)
     #store the results in geopackage
-    df_samPolygon2=generate_vector_from_masks(masks[0], file4sam,pointno) # to do
+    df_samPolygon2=generate_vector_from_masks(masks[0], file4sam,pointno, iswater) # to do
  
     # BGT intersection in procesarea
     result,df_bgt_intersectie_procesArea= getBGTIntsectieSam(centerPoint,pointno)
@@ -791,6 +823,7 @@ def procesImage(centerPoint,pointno):
         result,afwijking2big,df_BGTPolygon, df_samPolygon,BGT_SAM_Diff_Perc  = getBGTSAMDifferenceProcessArea(centerPoint)
 
     if result==True: 
+        afwijking2big=False # weghalen tvd 
         if (afwijking2big==True):
          #difference too big, find cause via  Ithax qualification  
             resultIthax, dfMasksIthax=getMaskFromIthax(centerPoint,pointno)
@@ -812,7 +845,11 @@ def procesImage(centerPoint,pointno):
             #no objects found by ithax therefore zero difference and           
            
         else:
-             setStatusSAMPolygon(pointno,"ok",BGT_SAM_Diff_Perc ,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
+             if BGT_SAM_Diff_Perc<=bgtSamAfwijkingsPerc:
+                setStatusSAMPolygon(pointno,"ok",BGT_SAM_Diff_Perc,0,df_bgt_intersectie_procesArea)
+             else:
+                 setStatusSAMPolygon(pointno,"nok",BGT_SAM_Diff_Perc,0,df_bgt_intersectie_procesArea)
+             #setStatusSAMPolygon(pointno,"ok",BGT_SAM_Diff_Perc ,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
     else:
     
        setStatusSAMPolygon(pointno,"NAN",BGT_SAM_Diff_Perc,BGT_SAM_Ithax_Diff_Perc,df_bgt_intersectie_procesArea)
